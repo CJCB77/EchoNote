@@ -47,5 +47,5 @@ sd.wait()
 # Write it into a WAV file
 wavio.write("recording.wav", my_recording, fs, sampwidth=2)
 
-# Send recording to openai for transcription
+
 
