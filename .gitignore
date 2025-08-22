@@ -3,6 +3,10 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+
+/recordings
+/transcriptions
+
 # C extensions
 *.so
 

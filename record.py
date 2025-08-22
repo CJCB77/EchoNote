@@ -6,6 +6,7 @@ import argparse
 import sys
 import numpy as np
 from datetime import datetime
+from transcribe import transcribe_and_save
 
 # ─── 1) Configure the root logger ───────────────────────────────────
 LOG_FORMAT = "%(asctime)s %(levelname)-8s %(message)s"
@@ -106,6 +107,11 @@ def main():
     finally:
         file.close()
         logger.info(f"Recording saved to {args.filename}")
+    
+    # Transcribe the audio file
+    logger.info("Transcribing audio...")
+    txt_path = transcribe_and_save(args.filename)
+    logger.info(f"Transcript saved to {txt_path}")
 
 if __name__ == "__main__":
     main()
