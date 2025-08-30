@@ -22,13 +22,23 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+def list_input_devices():
+    devices = sd.query_devices()
+    input_devices = []
+    for idx, dev in enumerate(devices):
+        if dev["max_input_channels"] > 0:
+            input_devices.append((idx, dev['name'],dev['hostapi'], dev['max_input_channels']))
+    
+    return input_devices
+
 # List available audio devices argument
 early_parser = argparse.ArgumentParser(add_help=False)
 early_parser.add_argument('-l', '--list-devices', action='store_true',
                     help="List available audio devices")
 args, remaining = early_parser.parse_known_args()
 if args.list_devices:
-    print(sd.query_devices())
+    for idx, name, hostapi, chans in list_input_devices():
+        print(f"{idx}: {name} ({chans} channels)")
     sys.exit(0)
 
 # Real parser
@@ -108,10 +118,10 @@ def main():
         file.close()
         logger.info(f"Recording saved to {args.filename}")
     
-    # Transcribe the audio file
-    logger.info("Transcribing audio...")
-    txt_path = transcribe_and_save(args.filename)
-    logger.info(f"Transcript saved to {txt_path}")
+    # # Transcribe the audio file
+    # logger.info("Transcribing audio...")
+    # txt_path = transcribe_and_save(args.filename)
+    # logger.info(f"Transcript saved to {txt_path}")
 
 if __name__ == "__main__":
     main()

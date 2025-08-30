@@ -1,37 +1,19 @@
 """
 Send audio files to openai transcription models
-and write text files based on response
+and write text files based on response.
+Handles large audio files by compressing, splitting on silence,
+and transcribing in chunks.
 """
 from openai import OpenAI
 from dotenv import load_dotenv
+from pydub import AudioSegment, silence
 import os
-from pydub import AudioSegment
+import tempfile
+import shutil
 
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 OPENAI_MODEL = "gpt-4o-transcribe"
-
-def compress_to_mp3(wav_path, mp3_path,bitrate="128k"):
-    audio = AudioSegment.from_wav(wav_path)
-    audio.export(mp3_path, format="mp3", bitrate=bitrate)
-    size_mb = os.path.getsize(mp3_path) / (1024 * 1024)
-    print(f"Compressed {wav_path} to {mp3_path} ({size_mb:.2f} MB)")
-    return size_mb
-
-def split_into_chunks(mp3_path, chunk_length_ms=10 * 60 * 1000):
-    """Split into N-minutes chunks (default 10 minutes)"""
-    audio = AudioSegment.from_file(mp3_path, format="mp3")
-    base, _ = os.path.splitext(mp3_path)
-    chunk_paths = []
-    for i, start in enumerate(range(0, len(audio), chunk_length_ms)):
-        chunk = audio[start: start + chunk_length_ms]
-        chunk_path = f"{base}_{i}.mp3"
-        chunk.export(chunk_path, format="mp3", bitrate="128k")
-        size_mb = os.path.getsize(chunk_path) / (1024 * 1024)
-        print(f" Chunk {i+1}: {chunk_path} ({size_mb:.2f} MB)")
-        chunk_paths.append(chunk_path)
-
-    return chunk_paths
 
 def transcribe_and_save(audio_path):
     # Read binary file
@@ -51,3 +33,81 @@ def transcribe_and_save(audio_path):
         
         return txt_path
 
+def transcribe_large_audio(audio_path):
+    """
+    Splits a large audio file into manageable chunks based on silence,
+    transcribes them using OpenAI's Transcribe API, and saves the combined transcript.
+    """
+    print("Transcribing large audio file. This may take some time...")
+    audio = AudioSegment.from_file(audio_path)
+
+    # --- FIX: Create a temporary directory instead of a single locked file ---
+    temp_dir = tempfile.mkdtemp()
+    try:
+        # 1. --- Compress and Convert Audio to M4A ---
+        print(f"Step 1/4: Loading and compressing audio file: {audio_path}")
+        temp_m4a_path = os.path.join(temp_dir, "compressed.m4a")
+        audio.export(temp_m4a_path, format="ipod")
+        compressed_audio = AudioSegment.from_file(temp_m4a_path, format="m4a")
+
+        # 2. --- Split Audio on Silence ---
+        print("Step 2/4: Splitting audio into chunks based on silence...")
+        chunks = silence.split_on_silence(
+            compressed_audio,
+            min_silence_len=700,
+            silence_thresh=compressed_audio.dBFS - 16,
+            keep_silence=300
+        )
+        if not chunks:
+            print("Could not find any chunks to split.")
+            return None
+
+        # 3. --- Group Small Chunks into Larger Segments ---
+        print("Step 3/4: Grouping chunks into processable segments...")
+        target_length_ms = 5 * 60 * 1000
+        processed_chunks = []
+        current_chunk = AudioSegment.empty()
+        for chunk in chunks:
+            if len(current_chunk) + len(chunk) < target_length_ms:
+                current_chunk += chunk
+            else:
+                processed_chunks.append(current_chunk)
+                current_chunk = chunk
+        if len(current_chunk) > 0:
+            processed_chunks.append(current_chunk)
+        print(f"-> Split into {len(processed_chunks)} segments for transcription.")
+
+        # 4. --- Transcribe Each Processed Chunk ---
+        full_transcript = ""
+        num_chunks = len(processed_chunks)
+        for i, chunk in enumerate(processed_chunks, start=1):
+            print(f"Step 4/4: Transcribing segment {i} of {num_chunks}...")
+            
+            # --- FIX: Use our temporary directory for chunk files ---
+            chunk_path = os.path.join(temp_dir, f"chunk_{i}.m4a")
+            chunk.export(chunk_path, format="ipod")
+
+            # Transcribe
+            with open(chunk_path, "rb") as audio_file:
+                try:
+                    res = client.audio.transcriptions.create(
+                        model=OPENAI_MODEL,
+                        file=audio_file
+                    )
+                    full_transcript += res.text + " "
+                except Exception as e:
+                    print(f"   -> Error transcribing chunk {i}: {e}")
+
+    finally:
+        # --- FIX: Clean up the temporary directory and all its contents ---
+        print("Cleaning up temporary files...")
+        shutil.rmtree(temp_dir)
+
+    # --- Save the final transcript ---
+    base_name = os.path.splitext(os.path.basename(audio_path))[0]
+    txt_path = f"./transcriptions/{base_name}.txt"
+    os.makedirs(os.path.dirname(txt_path), exist_ok=True)
+    with open(txt_path, "w", encoding='utf-8') as f: # Added encoding for broader compatibility
+        f.write(full_transcript.strip())
+        
+    return txt_path
